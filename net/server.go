@@ -92,7 +92,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 			return err
 		}
 		// 处理数据
-		respData := handleMsg(lenBs)
+		respData := handleMsg(resBs)
 		// 获取数据大小
 		respLen := len(respData)
 		// 构造响应长度
@@ -104,11 +104,11 @@ func (s *Server) handleConn(conn net.Conn) error {
 		copy(res[numOfLengthBytes:], respData)
 
 		// 回写请求
-		n, err := conn.Write(resBs)
+		n, err := conn.Write(res)
 		if err != nil {
 			return err
 		}
-		if n != len(resBs) {
+		if n != len(res) {
 			return errors.New("micro: 没写完数据")
 		}
 	}

@@ -10,7 +10,7 @@ import (
 
 // Pool TODO:
 type Pool struct {
-	// 空闲连接队列
+	// 空闲连接
 	idlesConns chan *idleConn
 	// 请求等待队列
 	reqQueue []connReq
@@ -57,6 +57,7 @@ func NewPool(initCnt int, maxIdleCnt int, maxCnt int, maxIdleTime time.Duration,
 	return res, nil
 }
 
+// Get 获取连接池内的连接
 func (p *Pool) Get(ctx context.Context) (net.Conn, error) {
 	select {
 	case <-ctx.Done():
@@ -79,7 +80,7 @@ func (p *Pool) Get(ctx context.Context) (net.Conn, error) {
 		default:
 			//
 			p.lock.Lock()
-			// 超过上限
+			// 在使用的连接超过上限
 			if p.cnt >= p.maxCnt {
 				// 使用的连接大于最大连接数，我们需要将后续请求加入等待队列
 				req := connReq{connChan: make(chan net.Conn, 1)}
@@ -110,9 +111,10 @@ func (p *Pool) Get(ctx context.Context) (net.Conn, error) {
 	}
 }
 
+// Put 使用完连接之后，放回连接池内
 func (p *Pool) Put(ctx context.Context, c net.Conn) error {
 	p.lock.Lock()
-	// 如果队列>0 说明有等待的，我们之间把接下来的请求放入队列中
+	// 如果队列>0 说明有等待的，我们之间把取出一个请求并发送
 	if len(p.reqQueue) > 0 {
 		req := p.reqQueue[0]
 		p.reqQueue = p.reqQueue[1:]
@@ -127,6 +129,7 @@ func (p *Pool) Put(ctx context.Context, c net.Conn) error {
 		lastActiveTime: time.Now(),
 	}
 	select {
+	// 把连接放入回连接池内
 	case p.idlesConns <- ic:
 	default:
 		// 空闲队列满了
