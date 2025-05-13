@@ -8,7 +8,6 @@ import (
 	"net"
 	"reflect"
 	"time"
-	"web/micro/rpc/message"
 )
 
 const numOfLengthBytes = 8
@@ -65,10 +64,10 @@ func setFuncField(service Service, p Proxy) error {
 				if err != nil {
 					return []reflect.Value{retVal, reflect.ValueOf(err)}
 				}
-				req := &message.Request{
+				req := &Request{
 					ServiceName: service.Name(),
 					MethodName:  fieldTyp.Name,
-					Data:        reqData,
+					Arg:         reqData,
 				}
 
 				// 关键就是这里，这里才是发起rpc调用的方法
@@ -126,7 +125,7 @@ func NewClient(addr string) (*Client, error) {
 
 // Invoke 发送请求给服务端并调用方法，最终获取返回值
 // 把一段二进制编码的调用信息发送给服务端
-func (c *Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
+func (c *Client) Invoke(ctx context.Context, req *Request) (*Response, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -137,7 +136,7 @@ func (c *Client) Invoke(ctx context.Context, req *message.Request) (*message.Res
 	if err != nil {
 		return nil, err
 	}
-	return &message.Response{
+	return &Response{
 		Data: res,
 	}, nil
 }

@@ -22,7 +22,6 @@ func ReadMsg(conn net.Conn) ([]byte, error) {
 	return data, err
 }
 
-// EncodeMsg 编码
 func EncodeMsg(data []byte) []byte {
 	reqLen := len(data)
 	// 构造响应长度

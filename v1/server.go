@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"reflect"
-	"web/micro/rpc/message"
 )
 
 type Server struct {
@@ -53,7 +52,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 			return err
 		}
 
-		req := &message.Request{}
+		req := &Request{}
 		err = json.Unmarshal(resBs, req)
 		if err != nil {
 			return err
@@ -78,19 +77,19 @@ func (s *Server) handleConn(conn net.Conn) error {
 	}
 }
 
-func (s *Server) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
+func (s *Server) Invoke(ctx context.Context, req *Request) (*Response, error) {
 	// 调用指定方法
 	service, ok := s.services[req.ServiceName]
 	if !ok {
 		return nil, errors.New("rpc: 要调用的方法不存在")
 	}
 
-	resp, err := service.invoke(ctx, req.MethodName, req.Data)
+	resp, err := service.invoke(ctx, req.MethodName, req.Arg)
 	if err != nil {
 		return nil, err
 	}
 
-	return &message.Response{
+	return &Response{
 		Data: resp,
 	}, nil
 }
