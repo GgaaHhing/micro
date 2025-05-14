@@ -56,27 +56,12 @@ func TestEnDecode(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.req.calculateBodyLength()
-			tc.req.calculateHeadLength()
+			tc.req.CalculateBodyLength()
+			tc.req.CalculateHeadLength()
 			// 对称过程，可以这样进行测试
 			data := EncodeReq(tc.req)
 			req := DecodeReq(data)
 			assert.Equal(t, tc.req, req)
 		})
 	}
-}
-
-func (req *Request) calculateHeadLength() {
-	headLength := 15 + len(req.ServiceName) + 1 + len(req.MethodName) + 1
-	for key, value := range req.Meta {
-		headLength += len(key)
-		headLength++
-		headLength += len(value)
-		headLength++
-	}
-	req.HeadLength = uint32(headLength)
-}
-
-func (req *Request) calculateBodyLength() {
-	req.BodyLength = uint32(len(req.Data))
 }

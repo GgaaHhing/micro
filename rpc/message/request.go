@@ -17,7 +17,7 @@ type Request struct {
 	Version    uint8
 	// 压缩算法
 	Compresser uint8
-	// 序列化协议
+	// 序列化协议：用来标识客户端和服务端用的是什么序列化方法
 	Serializer  uint8
 	ServiceName string
 	MethodName  string
@@ -25,6 +25,21 @@ type Request struct {
 	// any在编解码的过程很难搞，所以不选择
 	Meta map[string]string
 	Data []byte
+}
+
+func (req *Request) CalculateHeadLength() {
+	headLength := 15 + len(req.ServiceName) + 1 + len(req.MethodName) + 1
+	for key, value := range req.Meta {
+		headLength += len(key)
+		headLength++
+		headLength += len(value)
+		headLength++
+	}
+	req.HeadLength = uint32(headLength)
+}
+
+func (req *Request) CalculateBodyLength() {
+	req.BodyLength = uint32(len(req.Data))
 }
 
 func EncodeReq(req *Request) []byte {
@@ -113,6 +128,8 @@ func DecodeReq(data []byte) *Request {
 		req.Meta = meta
 	}
 
-	req.Data = data[req.HeadLength:]
+	if req.BodyLength != 0 {
+		req.Data = data[req.HeadLength:]
+	}
 	return req
 }

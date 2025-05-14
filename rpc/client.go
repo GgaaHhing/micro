@@ -2,28 +2,25 @@ package rpc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"github.com/silenceper/pool"
 	"net"
 	"reflect"
 	"time"
 	"web/micro/rpc/message"
+	"web/micro/rpc/serialize"
+	"web/micro/rpc/serialize/json"
 )
 
 const numOfLengthBytes = 8
 
-// InitClientProxy 要为函数类型的字段赋值
+// InitService 要为函数类型的字段赋值
 // type service struct{ GetById func() }
-func InitClientProxy(addr string, service Service) error {
-	client, err := NewClient(addr)
-	if err != nil {
-		return err
-	}
-	return setFuncField(service, client)
+func (c *Client) InitService(service Service) error {
+	return setFuncField(service, c, c.serializer)
 }
 
-func setFuncField(service Service, p Proxy) error {
+func setFuncField(service Service, p Proxy, s serialize.Serialize) error {
 	if service == nil {
 		return errors.New("rpc: 不支持 nil")
 	}
@@ -61,15 +58,19 @@ func setFuncField(service Service, p Proxy) error {
 
 				ctx := args[0].Interface().(context.Context)
 				retVal := reflect.New(fieldTyp.Type.Out(0).Elem())
-				reqData, err := json.Marshal(args[1])
+				reqData, err := s.Encode(args[1].Interface())
 				if err != nil {
 					return []reflect.Value{retVal, reflect.ValueOf(err)}
 				}
 				req := &message.Request{
+					Serializer:  s.Code(),
 					ServiceName: service.Name(),
 					MethodName:  fieldTyp.Name,
 					Data:        reqData,
 				}
+
+				req.CalculateHeadLength()
+				req.CalculateBodyLength()
 
 				// 关键就是这里，这里才是发起rpc调用的方法
 				resp, err := p.Invoke(ctx, req)
@@ -78,21 +79,36 @@ func setFuncField(service Service, p Proxy) error {
 					// err 在reflect的零值
 					return []reflect.Value{retVal, reflect.ValueOf(err)}
 				}
-				// TODO 处理响应
-				err = json.Unmarshal(resp.Data, retVal.Interface())
-				if err != nil {
-					return nil
+
+				var retErr error
+				if len(resp.Error) > 0 {
+					// 服务端出现error 可以考虑返回，也可以考虑继续执行
+					retErr = errors.New(string(resp.Error))
 				}
-				return []reflect.Value{retVal, reflect.Zero(reflect.TypeOf(new(error)).Elem())}
+
+				// TODO 处理响应
+				if len(resp.Data) > 0 {
+					err = s.Decode(resp.Data, retVal.Interface())
+					if err != nil {
+						return nil
+					}
+				}
+
+				var retErrVal reflect.Value
+				if retErr == nil {
+					retErrVal = reflect.Zero(reflect.TypeOf(new(error)).Elem())
+				} else {
+					retErrVal = reflect.ValueOf(retErr)
+				}
+
+				return []reflect.Value{retVal, retErrVal}
 			}
 			// 设置值给 GetById
 			fnVal := reflect.MakeFunc(fieldTyp.Type, fn)
 			// 这个Set就是篡改成对RPC发起调用的方法
 			fieldVal.Set(fnVal)
 		}
-
 	}
-
 	return nil
 }
 
@@ -100,10 +116,13 @@ type Client struct {
 	// 重构了，使用连接池
 	//addr string
 	// 也可以考虑使用连接池
-	pool pool.Pool
+	pool       pool.Pool
+	serializer serialize.Serialize
 }
 
-func NewClient(addr string) (*Client, error) {
+type ClientOption func(*Client)
+
+func NewClient(addr string, opts ...ClientOption) (*Client, error) {
 	p, err := pool.NewChannelPool(&pool.Config{
 		InitialCap: 1,
 		MaxCap:     30,
@@ -119,27 +138,34 @@ func NewClient(addr string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
-		pool: p,
-	}, nil
+	res := &Client{
+		pool:       p,
+		serializer: &json.Serializer{},
+	}
+
+	for _, opt := range opts {
+		opt(res)
+	}
+	return res, nil
+}
+
+func ClientWithSerializer(s serialize.Serialize) ClientOption {
+	return func(c *Client) {
+		c.serializer = s
+	}
 }
 
 // Invoke 发送请求给服务端并调用方法，最终获取返回值
 // 把一段二进制编码的调用信息发送给服务端
 func (c *Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
+	data := message.EncodeReq(req)
 	// 接下来发送给服务端
 	// 服务端需要提供一个连接
 	res, err := c.Send(data)
 	if err != nil {
 		return nil, err
 	}
-	return &message.Response{
-		Data: res,
-	}, nil
+	return message.DecodeResp(res), nil
 }
 
 func (c *Client) Send(data []byte) ([]byte, error) {
@@ -148,11 +174,9 @@ func (c *Client) Send(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	conn := val.(net.Conn)
-	// 编码数据
-	req := EncodeMsg(data)
 
 	// 发送请求
-	_, err = conn.Write(req)
+	_, err = conn.Write(data)
 	if err != nil {
 		return nil, err
 	}
