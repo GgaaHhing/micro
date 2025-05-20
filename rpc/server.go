@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"strconv"
+	"time"
 	"web/micro/rpc/message"
 	"web/micro/rpc/serialize"
 	"web/micro/rpc/serialize/json"
@@ -70,8 +72,22 @@ func (s *Server) handleConn(conn net.Conn) error {
 		if err != nil {
 			return err
 		}
+		ctx := context.Background()
+		cancel := func() {}
+		oneway, ok := req.Meta["one-way"]
+		if ok && oneway == "true" {
+			ctx = CtxWithOneway(ctx)
+		}
+		deadlineStr, ok := req.Meta["deadline"]
+		if ok && deadlineStr != "" {
+			if deadline, er := strconv.ParseInt(deadlineStr, 10, 64); er == nil {
+				ctx, cancel = context.WithDeadline(ctx, time.UnixMilli(deadline))
+			}
+		}
 
-		resp, err := s.Invoke(context.Background(), req)
+		resp, err := s.Invoke(ctx, req)
+		// 调用结束后，就可以cancel掉了
+		cancel()
 		if err != nil {
 			resp.Error = []byte(err.Error())
 			// 不return，只要连接还正常就继续通信
@@ -92,6 +108,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 }
 
 func (s *Server) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
+
 	// 调用指定方法
 	service, ok := s.services[req.ServiceName]
 	resp := &message.Response{
@@ -103,6 +120,13 @@ func (s *Server) Invoke(ctx context.Context, req *message.Request) (*message.Res
 
 	if !ok {
 		return resp, errors.New("rpc: 要调用的方法不存在")
+	}
+
+	if isOneway(ctx) {
+		go func() {
+			_, _ = service.invoke(ctx, req)
+		}()
+		return nil, errors.New("micro: 微服务服务端收到 oneway 请求")
 	}
 
 	respData, err := service.invoke(ctx, req)
@@ -125,7 +149,7 @@ type reflectionStub struct {
 func (s *reflectionStub) invoke(ctx context.Context, req *message.Request) ([]byte, error) {
 	method := s.value.MethodByName(req.MethodName)
 	in := make([]reflect.Value, 2)
-	in[0] = reflect.ValueOf(context.Background())
+	in[0] = reflect.ValueOf(ctx)
 
 	inReq := reflect.New(method.Type().In(1).Elem())
 	serializer, ok := s.serializers[req.Serializer]

@@ -6,6 +6,7 @@ import (
 	"github.com/silenceper/pool"
 	"net"
 	"reflect"
+	"strconv"
 	"time"
 	"web/micro/rpc/message"
 	"web/micro/rpc/serialize"
@@ -62,10 +63,20 @@ func setFuncField(service Service, p Proxy, s serialize.Serialize) error {
 				if err != nil {
 					return []reflect.Value{retVal, reflect.ValueOf(err)}
 				}
+				meta := make(map[string]string, 2)
+				if deadline, ok := ctx.Deadline(); ok {
+					// 毫秒数，十进制
+					meta["deadline"] = strconv.FormatInt(deadline.UnixMilli(), 10)
+				}
+
+				if isOneway(ctx) {
+					meta = map[string]string{"one-way": "true"}
+				}
 				req := &message.Request{
 					Serializer:  s.Code(),
 					ServiceName: service.Name(),
 					MethodName:  fieldTyp.Name,
+					Meta:        meta,
 					Data:        reqData,
 				}
 
@@ -128,7 +139,11 @@ func NewClient(addr string, opts ...ClientOption) (*Client, error) {
 		MaxCap:     30,
 		MaxIdle:    10,
 		Factory: func() (interface{}, error) {
-			return net.DialTimeout("tcp", addr, time.Second*3), nil
+			conn, err := net.DialTimeout("tcp", addr, time.Second*3)
+			if err != nil {
+				return nil, err
+			}
+			return conn, nil
 		},
 		Close: func(obj interface{}) error {
 			return obj.(net.Conn).Close()
@@ -158,17 +173,40 @@ func ClientWithSerializer(s serialize.Serialize) ClientOption {
 // Invoke 发送请求给服务端并调用方法，最终获取返回值
 // 把一段二进制编码的调用信息发送给服务端
 func (c *Client) Invoke(ctx context.Context, req *message.Request) (*message.Response, error) {
+	if ctx.Done() != nil {
+		return nil, ctx.Err()
+	}
+
+	ch := make(chan struct{})
+	defer close(ch)
+	var (
+		resp *message.Response
+		err  error
+	)
+	go func() {
+		resp, err = c.doInvoke(ctx, req)
+		ch <- struct{}{}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-ch:
+		return resp, err
+	}
+}
+
+func (c *Client) doInvoke(ctx context.Context, req *message.Request) (*message.Response, error) {
 	data := message.EncodeReq(req)
 	// 接下来发送给服务端
 	// 服务端需要提供一个连接
-	res, err := c.Send(data)
+	res, err := c.send(ctx, data)
 	if err != nil {
 		return nil, err
 	}
 	return message.DecodeResp(res), nil
 }
 
-func (c *Client) Send(data []byte) ([]byte, error) {
+func (c *Client) send(ctx context.Context, data []byte) ([]byte, error) {
 	val, err := c.pool.Get()
 	if err != nil {
 		return nil, err
@@ -179,6 +217,9 @@ func (c *Client) Send(data []byte) ([]byte, error) {
 	_, err = conn.Write(data)
 	if err != nil {
 		return nil, err
+	}
+	if isOneway(ctx) {
+		return nil, errors.New("micro: 这是一个oneway调用，不应检测结果")
 	}
 	// 读取响应的数据
 	return ReadMsg(conn)
